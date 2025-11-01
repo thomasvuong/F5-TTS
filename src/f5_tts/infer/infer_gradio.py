@@ -74,6 +74,18 @@ def load_e2tts():
     return load_model(UNetT, E2TTS_model_cfg, ckpt_path)
 
 
+def load_vietnamese():
+    # Load Vietnamese model from local directory
+    import pathlib
+    # From app/src/f5_tts/infer/infer_gradio.py, go up 4 levels to reach app/
+    base_dir = pathlib.Path(__file__).parent.parent.parent.parent
+    ckpt_path = str(base_dir / "ckpts" / "vietnamese" / "model_85044.safetensors")
+    vocab_path = str(base_dir / "ckpts" / "vietnamese" / "vocab.txt")
+    # Use same config as F5-TTS v1 Base
+    Vietnamese_model_cfg = json.loads(DEFAULT_TTS_MODEL_CFG[2])
+    return load_model(DiT, Vietnamese_model_cfg, ckpt_path, vocab_file=vocab_path)
+
+
 def load_custom(ckpt_path: str, vocab_path="", model_cfg=None):
     ckpt_path, vocab_path = ckpt_path.strip(), vocab_path.strip()
     if ckpt_path.startswith("hf://"):
@@ -89,6 +101,7 @@ def load_custom(ckpt_path: str, vocab_path="", model_cfg=None):
 
 F5TTS_ema_model = load_f5tts()
 E2TTS_ema_model = load_e2tts() if USING_SPACES else None
+Vietnamese_ema_model = None if USING_SPACES else None
 custom_ema_model, pre_custom_path = None, ""
 
 chat_model_state = None
@@ -167,6 +180,12 @@ def infer(
             show_info("Loading E2-TTS model...")
             E2TTS_ema_model = load_e2tts()
         ema_model = E2TTS_ema_model
+    elif model == "Vietnamese":
+        global Vietnamese_ema_model
+        if Vietnamese_ema_model is None:
+            show_info("Loading Vietnamese model...")
+            Vietnamese_ema_model = load_vietnamese()
+        ema_model = Vietnamese_ema_model
     elif isinstance(model, tuple) and model[0] == "Custom":
         assert not USING_SPACES, "Only official checkpoints allowed in Spaces."
         global custom_ema_model, pre_custom_path
@@ -994,7 +1013,7 @@ If you're having issues, try converting your reference audio to WAV or MP3, clip
     with gr.Row():
         if not USING_SPACES:
             choose_tts_model = gr.Radio(
-                choices=[DEFAULT_TTS_MODEL, "E2-TTS", "Custom"], label="Choose TTS Model", value=DEFAULT_TTS_MODEL
+                choices=[DEFAULT_TTS_MODEL, "E2-TTS", "Vietnamese", "Custom"], label="Choose TTS Model", value=DEFAULT_TTS_MODEL
             )
         else:
             choose_tts_model = gr.Radio(
