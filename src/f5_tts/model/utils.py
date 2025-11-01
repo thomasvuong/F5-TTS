@@ -133,11 +133,36 @@ def get_tokenizer(dataset_name, tokenizer: str = "pinyin"):
         vocab_size = 256
 
     elif tokenizer == "custom":
+        # DEBUG: Add logging for vocab loading
+        import sys
+        debug_mode = "vietnamese" in dataset_name.lower() if isinstance(dataset_name, str) else False
+        
         with open(dataset_name, "r", encoding="utf-8") as f:
             vocab_char_map = {}
+            line_count = 0
             for i, char in enumerate(f):
-                vocab_char_map[char[:-1]] = i
+                key = char[:-1]  # Remove newline
+                vocab_char_map[key] = i
+                line_count += 1
+                if debug_mode and i < 3:
+                    print(f"[DEBUG get_tokenizer] Line {i}: char={repr(char)}, key={repr(key)}")
+                if debug_mode and i >= line_count - 3:
+                    print(f"[DEBUG get_tokenizer] Line {i}: char={repr(char)}, key={repr(key)}")
+        
         vocab_size = len(vocab_char_map)
+        
+        if debug_mode:
+            print(f"[DEBUG get_tokenizer] Total lines read: {line_count}")
+            print(f"[DEBUG get_tokenizer] Vocab dict size: {vocab_size}")
+            print(f"[DEBUG get_tokenizer] Max index: {max(vocab_char_map.values())}")
+            # Check for empty string entries
+            empty_entries = [(k, v) for k, v in vocab_char_map.items() if k == '']
+            if empty_entries:
+                print(f"[DEBUG get_tokenizer] Empty string entries: {empty_entries}")
+            if vocab_size != 2565:
+                print(f"[DEBUG get_tokenizer] ⚠️ WARNING: Vocab size is {vocab_size}, expected 2565!")
+                print(f"[DEBUG get_tokenizer] First entry: {list(vocab_char_map.items())[0]}")
+                print(f"[DEBUG get_tokenizer] Last entry: {list(vocab_char_map.items())[-1]}")
 
     return vocab_char_map, vocab_size
 

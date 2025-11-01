@@ -77,13 +77,118 @@ def load_e2tts():
 def load_vietnamese():
     # Load Vietnamese model from local directory
     import pathlib
+    import sys
+    
     # From app/src/f5_tts/infer/infer_gradio.py, go up 4 levels to reach app/
     base_dir = pathlib.Path(__file__).parent.parent.parent.parent
     ckpt_path = str(base_dir / "ckpts" / "vietnamese" / "model_85044.safetensors")
     vocab_path = str(base_dir / "ckpts" / "vietnamese" / "vocab.txt")
-    # Use same config as F5-TTS v1 Base
-    Vietnamese_model_cfg = json.loads(DEFAULT_TTS_MODEL_CFG[2])
-    return load_model(DiT, Vietnamese_model_cfg, ckpt_path, vocab_file=vocab_path)
+    
+    print(f"\n[DEBUG] load_vietnamese() called")
+    print(f"[DEBUG] base_dir: {base_dir}")
+    print(f"[DEBUG] vocab_path: {vocab_path}")
+    print(f"[DEBUG] vocab_path exists: {pathlib.Path(vocab_path).exists()}")
+    
+    # Verify vocab file exists and has correct size
+    if not pathlib.Path(vocab_path).exists():
+        raise FileNotFoundError(f"Vietnamese vocab file not found: {vocab_path}")
+    
+    # DEBUG: Read vocab file multiple ways to see what's happening
+    print(f"[DEBUG] Reading vocab file...")
+    
+    # Method 1: Direct read (what get_tokenizer will do)
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab_char_map_direct = {}
+        line_count_direct = 0
+        for i, char in enumerate(f):
+            vocab_char_map_direct[char[:-1]] = i
+            line_count_direct += 1
+        vocab_size_direct = len(vocab_char_map_direct)
+    
+    print(f"[DEBUG] Direct read - Lines: {line_count_direct}, Vocab size: {vocab_size_direct}, Max index: {max(vocab_char_map_direct.values())}")
+    
+    # Method 2: Using get_tokenizer (what load_model will actually use)
+    from f5_tts.model.utils import get_tokenizer
+    vocab_char_map_get, vocab_size_get = get_tokenizer(vocab_path, "custom")
+    print(f"[DEBUG] get_tokenizer() - Vocab size: {vocab_size_get}, Max index: {max(vocab_char_map_get.values()) if vocab_char_map_get else 'N/A'}")
+    
+    # Method 3: Read all lines and check
+    with open(vocab_path, "rb") as f:
+        raw_content = f.read()
+        lines_raw = raw_content.split(b'\n')
+    print(f"[DEBUG] Raw file - Total bytes: {len(raw_content)}, Lines (split by \\n): {len(lines_raw)}")
+    
+    # Check for issues
+    if vocab_size_direct != 2565:
+        print(f"[ERROR] Vocab size mismatch detected!")
+        print(f"[ERROR] Expected: 2565, Got: {vocab_size_direct}")
+        print(f"[ERROR] First 3 entries: {list(vocab_char_map_direct.items())[:3]}")
+        print(f"[ERROR] Last 3 entries: {list(vocab_char_map_direct.items())[-3:]}")
+        
+        # Check for duplicate empty strings
+        empty_indices = [idx for char, idx in vocab_char_map_direct.items() if char == '']
+        if len(empty_indices) > 1:
+            print(f"[ERROR] Found multiple empty strings at indices: {empty_indices}")
+        
+        raise ValueError(
+            f"Vietnamese vocab file has {vocab_size_direct} entries, expected 2565. "
+            f"File: {vocab_path}, Direct read size: {vocab_size_direct}, get_tokenizer size: {vocab_size_get}"
+        )
+    
+    if vocab_size_get != 2565:
+        print(f"[ERROR] get_tokenizer returned wrong size: {vocab_size_get}, expected 2565")
+        raise ValueError(
+            f"get_tokenizer() returned vocab size {vocab_size_get}, expected 2565. "
+            f"This will cause model size mismatch!"
+        )
+    
+    print(f"[DEBUG] ✅ Vocab validation passed - size: {vocab_size_direct}")
+    
+    # CRITICAL FIX: The TextEmbedding class adds +1 to text_num_embeds
+    # So if vocab_size is 2565, the model creates embedding(2566, 512)
+    # But the checkpoint has 2565 entries. We need to pass vocab_size - 1
+    from safetensors.torch import load_file
+    ckpt = load_file(ckpt_path)
+    embed_key = 'ema_model.transformer.text_embed.text_embed.weight'
+    if embed_key in ckpt:
+        checkpoint_vocab_size = ckpt[embed_key].shape[0]
+        print(f"[DEBUG] Checkpoint embedding size: {checkpoint_vocab_size}")
+        
+        if checkpoint_vocab_size == vocab_size_direct:
+            adjusted_vocab_size = vocab_size_direct - 1
+            print(f"[DEBUG] ✅ Using text_num_embeds={adjusted_vocab_size}")
+        elif checkpoint_vocab_size == vocab_size_direct + 1:
+            adjusted_vocab_size = vocab_size_direct
+            print(f"[DEBUG] ✅ Checkpoint already has +1, using vocab_size={vocab_size_direct}")
+        else:
+            raise ValueError(f"Checkpoint vocab size ({checkpoint_vocab_size}) mismatch")
+    else:
+        adjusted_vocab_size = vocab_size_direct - 1
+        print(f"[DEBUG] ⚠️ Using default adjusted vocab_size={adjusted_vocab_size}")
+    
+    # IMPORTANT: Based on research, Vietnamese models use F5TTS_Base config (not F5TTS_v1_Base)
+    # Key differences: text_mask_padding=False, pe_attn_head=1
+    # Use F5TTS_Base configuration
+    Vietnamese_model_cfg = dict(
+        dim=1024,
+        depth=22,
+        heads=16,
+        ff_mult=2,
+        text_dim=512,
+        text_mask_padding=False,  # Different from v1_Base!
+        conv_layers=4,
+        pe_attn_head=1,  # Different from v1_Base (which is null)!
+    )
+    Vietnamese_model_cfg["text_num_embeds"] = adjusted_vocab_size
+    print(f"[DEBUG] ✅ Using F5TTS_Base config (not v1_Base) with text_mask_padding=False, pe_attn_head=1")
+    
+    print(f"[DEBUG] Loading model with vocab_file={vocab_path}")
+    print(f"[DEBUG] Model config: {Vietnamese_model_cfg}")
+    print(f"[DEBUG] text_num_embeds will become {adjusted_vocab_size + 1} in TextEmbedding")
+    
+    result = load_model(DiT, Vietnamese_model_cfg, ckpt_path, vocab_file=vocab_path)
+    print(f"[DEBUG] ✅ Model loaded successfully")
+    return result
 
 
 def load_custom(ckpt_path: str, vocab_path="", model_cfg=None):

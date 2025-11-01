@@ -252,8 +252,21 @@ def load_model(
     print("model : ", ckpt_path, "\n")
 
     vocab_char_map, vocab_size = get_tokenizer(vocab_file, tokenizer)
+    
+    # DEBUG: Log vocab size for Vietnamese model
+    if "vietnamese" in vocab_file.lower():
+        print(f"[DEBUG load_model] Vocab file: {vocab_file}")
+        print(f"[DEBUG load_model] Vocab size from get_tokenizer: {vocab_size}")
+        print(f"[DEBUG load_model] Expected: 2565")
+        if vocab_size != 2565:
+            print(f"[DEBUG load_model] ⚠️ ERROR: Vocab size mismatch! This will cause model loading to fail!")
+    
+    # Use text_num_embeds from config if provided (for Vietnamese model fix), otherwise use vocab_size
+    text_num_embeds = model_cfg.pop("text_num_embeds", vocab_size)
+    print(f"[DEBUG load_model] Using text_num_embeds={text_num_embeds} (vocab_size={vocab_size})")
+    
     model = CFM(
-        transformer=model_cls(**model_cfg, text_num_embeds=vocab_size, mel_dim=n_mel_channels),
+        transformer=model_cls(**model_cfg, text_num_embeds=text_num_embeds, mel_dim=n_mel_channels),
         mel_spec_kwargs=dict(
             n_fft=n_fft,
             hop_length=hop_length,
@@ -474,7 +487,21 @@ def infer_batch_process(
 
         # Prepare the text
         text_list = [ref_text + gen_text]
-        final_text_list = convert_char_to_pinyin(text_list)
+        
+        # IMPORTANT: For Vietnamese and other custom vocab models, use character-level tokenization
+        # Only convert to pinyin for Chinese models with pinyin tokenizer
+        # Check if model uses custom vocab (Vietnamese models use custom vocab, not pinyin)
+        if hasattr(model_obj, 'vocab_char_map') and model_obj.vocab_char_map is not None:
+            # For custom vocab (like Vietnamese), use character-level tokenization directly
+            # The vocab_char_map will handle the conversion in model.sample()
+            print(f"[DEBUG] ✅ Using character-level tokenization for custom vocab model")
+            print(f"[DEBUG] Original text: {text_list[0][:50]}...")
+            final_text_list = text_list  # Use text as-is, model will tokenize using vocab_char_map
+            print(f"[DEBUG] Text will be tokenized character-by-character using vocab_char_map")
+        else:
+            # For default models with pinyin tokenizer, convert to pinyin
+            print(f"[DEBUG] Converting to pinyin for default model")
+            final_text_list = convert_char_to_pinyin(text_list)
 
         ref_audio_len = audio.shape[-1] // hop_length
         if fix_duration is not None:
